@@ -25,6 +25,17 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(0xE50000, payload["embeds"][0]["color"])
         self.assertEqual([], payload["allowed_mentions"]["parse"])
 
+    def test_demo_is_detected_and_labelled(self):
+        html = '''<ul data-list-type="demonstrator"><li class="tb-list-item" data-id="demo1"
+          data-vehicleline="LandCruiser Prado" data-item-category2="LandCruiser Prado" data-item-category3="GX">
+          <h3>2026 Toyota LandCruiser Prado GX (Onyx Night)</h3><small>VIN: DEMOVIN123456789</small>
+          <a href="/inventory/demo">View Vehicle Details</a></li></ul>'''
+        car = parse_stock(html, {"name": "Test Toyota", "url": "https://example.com/prado"})[0]
+        self.assertEqual("Demo", car["condition"])
+        self.assertEqual("https://example.com/inventory/demo", car["detail_url"])
+        car["dealer"] = "Test Toyota"
+        self.assertIn("DEMO VEHICLE", discord_payload(car)["embeds"][0]["title"])
+
 
 if __name__ == "__main__":
     unittest.main()

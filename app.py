@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import getpass
 import os
 import re
 import sqlite3
@@ -49,7 +50,7 @@ def init_db() -> None:
         );
         CREATE TABLE IF NOT EXISTS vehicles (
           vin TEXT PRIMARY KEY, dealer TEXT NOT NULL, stock_id TEXT, title TEXT NOT NULL,
-          grade TEXT NOT NULL, colour TEXT NOT NULL, price TEXT, image_url TEXT,
+          grade TEXT NOT NULL, colour TEXT NOT NULL, condition TEXT NOT NULL DEFAULT 'New', price TEXT, image_url TEXT,
           detail_url TEXT, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
           first_scan_id INTEGER NOT NULL, last_scan_id INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
           newly_added INTEGER NOT NULL DEFAULT 1
@@ -58,6 +59,8 @@ def init_db() -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(vehicles)")}
         if "newly_added" not in columns:
             conn.execute("ALTER TABLE vehicles ADD COLUMN newly_added INTEGER NOT NULL DEFAULT 0")
+        if "condition" not in columns:
+            conn.execute("ALTER TABLE vehicles ADD COLUMN condition TEXT NOT NULL DEFAULT 'New'")
 
 
 def load_dealers() -> list[dict]:
@@ -91,10 +94,14 @@ def parse_stock(html: str, dealer: dict) -> list[dict]:
         price_node = card.select_one(".tb-list-item-price")
         price_match = re.search(r"\$[\d,]+", clean(price_node.get_text(" ") if price_node else ""))
         image = card.select_one("img[src]")
-        link = card.select_one('a[href*="/inventory/"]')
+        link = card.select_one('a[href*="/inventory/"], a[href*="/demo/"]')
+        stock_list = card.find_parent("ul", attrs={"data-list-type": True})
+        list_type = clean(stock_list.get("data-list-type") if stock_list else "").lower()
+        category4 = clean(card.get("data-item-category4")).lower()
+        condition = "Demo" if "demo" in list_type or "demo" in category4 else "New"
         found.append({
             "vin": vin_match.group(1).upper(), "stock_id": card.get("data-id"),
-            "title": heading, "grade": grade, "colour": colour,
+            "title": heading, "grade": grade, "colour": colour, "condition": condition,
             "price": price_match.group(0) if price_match else None,
             "image_url": urljoin(dealer["url"], image.get("src")) if image else None,
             "detail_url": urljoin(dealer["url"], link.get("href")) if link else dealer["url"],
@@ -106,6 +113,7 @@ def discord_payload(vehicle: dict) -> dict:
     grade = vehicle["grade"].upper()
     wanted_colour = vehicle["colour"].lower() in {"onyx black", "onyx night", "dusty bronze"}
     priority = grade == "GX" and wanted_colour
+    is_demo = vehicle.get("condition", "New").lower() == "demo"
     if priority:
         heading, embed_colour = "🚨 PRIORITY PRADO FOUND 🚨", 0xE50000
     elif grade == "GX":
@@ -114,10 +122,13 @@ def discord_payload(vehicle: dict) -> dict:
         heading, embed_colour = "🎨 New preferred-colour Prado found", 0x8A6138
     else:
         heading, embed_colour = "New Prado found", 0x2774AE
+    if is_demo:
+        heading = f"🧪 DEMO VEHICLE — {heading}"
     fields = [
         {"name": "Dealer", "value": vehicle["dealer"], "inline": True},
         {"name": "Grade", "value": vehicle["grade"], "inline": True},
         {"name": "Colour", "value": vehicle["colour"], "inline": True},
+        {"name": "Condition", "value": "DEMONSTRATOR" if is_demo else "Brand new", "inline": True},
         {"name": "Price", "value": vehicle.get("price") or "Ask dealer", "inline": True},
         {"name": "VIN", "value": vehicle["vin"], "inline": False},
     ]
@@ -148,6 +159,21 @@ def notify_discord(vehicles: list[dict]) -> tuple[int, list[str]]:
     return sent, errors
 
 
+def configure_discord() -> None:
+    global DISCORD_WEBHOOK_URL
+    if DISCORD_WEBHOOK_URL or not os.isatty(0):
+        return
+    print("Discord alerts are not configured.")
+    entered = getpass.getpass("Paste Discord webhook URL (hidden), or press Enter to skip: ").strip()
+    if not entered:
+        print("Starting without Discord alerts.")
+        return
+    if not re.fullmatch(r"https://(?:canary\.|ptb\.)?(?:discord(?:app)?\.com)/api/webhooks/\d+/[^\s]+", entered):
+        raise SystemExit("That does not look like a valid Discord webhook URL.")
+    DISCORD_WEBHOOK_URL = entered
+    print("Discord alerts enabled for this run.")
+
+
 def scan_all() -> dict:
     if not scan_lock.acquire(blocking=False):
         return {"started": False, "message": "A scan is already running"}
@@ -162,31 +188,39 @@ def scan_all() -> dict:
         headers = {"User-Agent": USER_AGENT, "Accept": "text/html"}
         for dealer in dealers:
             try:
-                response = requests.get(dealer["url"], headers=headers, timeout=HTTP_TIMEOUT)
-                response.raise_for_status()
-                vehicles = parse_stock(response.text, dealer)
-                # A valid stock page always has this marker, including when there are zero results.
-                if "Dealer Stock" not in response.text and "LandCruiser Prado" not in response.text:
-                    raise ValueError("Page did not look like a Toyota stock page")
+                new_url = dealer["url"]
+                demo_url = dealer.get("demo_url") or urljoin(new_url, "/demonstrators/prado")
+                vehicles_by_vin = {}
+                for source_url in (new_url, demo_url):
+                    response = requests.get(source_url, headers=headers, timeout=HTTP_TIMEOUT)
+                    response.raise_for_status()
+                    if "LandCruiser Prado" not in response.text:
+                        raise ValueError(f"Page did not look like a Prado stock page: {source_url}")
+                    source_dealer = {**dealer, "url": source_url}
+                    for vehicle in parse_stock(response.text, source_dealer):
+                        vehicles_by_vin[vehicle["vin"]] = vehicle
+                vehicles = list(vehicles_by_vin.values())
                 with db() as conn:
                     conn.execute("UPDATE vehicles SET newly_added=0 WHERE dealer=?", (dealer["name"],))
                     for vehicle in vehicles:
                         seen.add(vehicle["vin"])
                         previous = conn.execute("SELECT vin, active FROM vehicles WHERE vin=?", (vehicle["vin"],)).fetchone()
                         values = (dealer["name"], vehicle["stock_id"], vehicle["title"], vehicle["grade"],
-                                  vehicle["colour"], vehicle["price"], vehicle["image_url"], vehicle["detail_url"], now, scan_id, vehicle["vin"])
+                                  vehicle["colour"], vehicle["condition"], vehicle["price"], vehicle["image_url"],
+                                  vehicle["detail_url"], now, scan_id, vehicle["vin"])
                         if previous:
                             if not previous["active"]:
                                 newly_found.append({**vehicle, "dealer": dealer["name"]})
-                            conn.execute("""UPDATE vehicles SET dealer=?,stock_id=?,title=?,grade=?,colour=?,price=?,image_url=?,detail_url=?,
+                            conn.execute("""UPDATE vehicles SET dealer=?,stock_id=?,title=?,grade=?,colour=?,condition=?,price=?,image_url=?,detail_url=?,
                               last_seen=?,last_scan_id=?,active=1,newly_added=? WHERE vin=?""", values[:-1] + (0 if previous["active"] else 1, values[-1]))
                         else:
                             # On the first run this intentionally includes every currently stocked car.
                             newly_found.append({**vehicle, "dealer": dealer["name"]})
-                            conn.execute("""INSERT INTO vehicles(dealer,stock_id,title,grade,colour,price,image_url,detail_url,
-                              first_seen,last_seen,first_scan_id,last_scan_id,active,newly_added,vin) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,1,?)""",
+                            conn.execute("""INSERT INTO vehicles(dealer,stock_id,title,grade,colour,condition,price,image_url,detail_url,
+                              first_seen,last_seen,first_scan_id,last_scan_id,active,newly_added,vin) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?)""",
                               values[:-2] + (now, scan_id, scan_id, vehicle["vin"]))
-                    conn.execute("INSERT INTO dealer_checks VALUES(?,?,?,?,?,NULL)", (scan_id, dealer["name"], dealer["url"], 1, len(vehicles)))
+                    checked_urls = f"{new_url} | {demo_url}"
+                    conn.execute("INSERT INTO dealer_checks VALUES(?,?,?,?,?,NULL)", (scan_id, dealer["name"], checked_urls, 1, len(vehicles)))
                 total += len(vehicles)
             except Exception as exc:
                 with db() as conn:
@@ -226,11 +260,8 @@ def scan_all() -> dict:
 
 
 def scheduler() -> None:
-    # Scan immediately on startup only if there has never been a completed scan.
-    with db() as conn:
-        last = conn.execute("SELECT finished_at FROM scans WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
-    if not last:
-        scan_all()
+    # Always check on startup, then once per configured interval.
+    scan_all()
     while True:
         time.sleep(INTERVAL_SECONDS)
         scan_all()
@@ -271,6 +302,7 @@ def scan():
 
 
 if __name__ == "__main__":
+    configure_discord()
     init_db()
     threading.Thread(target=scheduler, daemon=True, name="prado-scheduler").start()
     app.run(host=os.environ.get("PRADO_HOST", "127.0.0.1"), port=int(os.environ.get("PRADO_PORT", "8080")), debug=False)
