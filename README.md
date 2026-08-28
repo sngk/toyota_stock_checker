@@ -24,7 +24,7 @@ sudo apt install -y git python3 python3-venv
 bash install_pi.sh
 ```
 
-The installer asks for the Discord webhook, runs the app as a `systemd` service on port 443, and starts it automatically after a reboot. Connect your phone to the same home Wi-Fi and open the local address printed by the installer, such as `http://192.168.1.50:443`.
+The installer asks for the Discord webhook, runs the app as a `systemd` service on port 8080, and starts it automatically after a reboot. Connect your phone to the same home Wi-Fi and open the local address printed by the installer, such as `http://192.168.1.50:8080`. Port 8080 avoids conflicts with Pi-hole's web server.
 
 This is local-network access only. It does not expose the dashboard to the internet. For a stable bookmark, reserve the Pi's IP address in your router's DHCP settings, or try `http://raspberrypi.local:443` if your network supports local hostnames.
 

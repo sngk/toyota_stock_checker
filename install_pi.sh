@@ -35,7 +35,7 @@ if [[ ! -f "$repo_dir/.env" ]]; then
   {
     printf 'DISCORD_WEBHOOK_URL=%s\n' "$webhook_url"
     printf 'PRADO_HOST=0.0.0.0\n'
-    printf 'PRADO_PORT=443\n'
+    printf 'PRADO_PORT=8080\n'
   } > "$repo_dir/.env"
   chmod 600 "$repo_dir/.env"
 else
@@ -57,8 +57,6 @@ EnvironmentFile=-${repo_dir}/.env
 ExecStart=${repo_dir}/.venv/bin/python ${repo_dir}/app.py
 Restart=on-failure
 RestartSec=10
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 
 [Install]
@@ -96,6 +94,6 @@ sudo systemctl enable --now "${service_name}.service" "${service_name}-update.ti
 
 lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "Installed and running."
-echo "Dashboard: http://${lan_ip:-RASPBERRY_PI_IP}:443"
+echo "Dashboard: http://${lan_ip:-RASPBERRY_PI_IP}:8080"
 echo "Status: sudo systemctl status ${service_name}"
 echo "Logs:   journalctl -u ${service_name} -f"
