@@ -3,15 +3,33 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 service_user="$(id -un)"
-python_bin="$(command -v python3)"
 service_name="prado-watch"
 update_marker="/tmp/prado-watch-update-${service_user}"
 
+echo "WA Prado Watch Raspberry Pi installer"
+echo "Repository: $repo_dir"
+echo "Service user: $service_user"
+
+if ! python_bin="$(command -v python3)"; then
+  echo "ERROR: python3 is not installed."
+  echo "Run: sudo apt update && sudo apt install -y git python3 python3-venv"
+  exit 1
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "ERROR: git is not installed."
+  echo "Run: sudo apt update && sudo apt install -y git python3 python3-venv"
+  exit 1
+fi
+
+echo "[1/5] Creating Python environment..."
 "$python_bin" -m venv "$repo_dir/.venv"
+echo "[2/5] Installing Python packages (this can take a few minutes)..."
 "$repo_dir/.venv/bin/pip" install --upgrade pip
 "$repo_dir/.venv/bin/pip" install -r "$repo_dir/requirements.txt"
 
 if [[ ! -f "$repo_dir/.env" ]]; then
+  echo "[3/5] Configuring Discord..."
   read -r -s -p "Discord webhook URL (leave blank to disable Discord): " webhook_url
   echo
   {
@@ -20,8 +38,11 @@ if [[ ! -f "$repo_dir/.env" ]]; then
     printf 'PRADO_PORT=443\n'
   } > "$repo_dir/.env"
   chmod 600 "$repo_dir/.env"
+else
+  echo "[3/5] Existing Discord configuration found; keeping it."
 fi
 
+echo "[4/5] Installing background services (sudo may ask for your password)..."
 sudo tee "/etc/systemd/system/${service_name}.service" >/dev/null <<EOF
 [Unit]
 Description=WA Prado stock watcher
@@ -70,6 +91,7 @@ WantedBy=timers.target
 EOF
 
 sudo systemctl daemon-reload
+echo "[5/5] Starting the app and automatic updater..."
 sudo systemctl enable --now "${service_name}.service" "${service_name}-update.timer"
 
 lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
