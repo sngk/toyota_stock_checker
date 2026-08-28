@@ -36,6 +36,19 @@ class ParserTest(unittest.TestCase):
         car["dealer"] = "Test Toyota"
         self.assertIn("DEMO VEHICLE", discord_payload(car)["embeds"][0]["title"])
 
+    def test_rockingham_demo_fixture_when_present(self):
+        fixture = Path("rockingham-demo.tmp.html")
+        if not fixture.exists():
+            self.skipTest("downloaded demo fixture not present")
+        cars = parse_stock(fixture.read_text(encoding="utf-8"), {
+            "name": "Rockingham Toyota",
+            "url": "https://rockinghamtoyota.dealer.toyota.com.au/demonstrators/prado",
+        })
+        self.assertEqual(1, len(cars))
+        self.assertEqual("JTEACDBJ50K034038", cars[0]["vin"])
+        self.assertEqual("Demo", cars[0]["condition"])
+        self.assertIn("/demo/prado/", cars[0]["detail_url"])
+
 
 if __name__ == "__main__":
     unittest.main()
