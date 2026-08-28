@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-from app import parse_stock
+from app import discord_payload, parse_stock
 
 
 class ParserTest(unittest.TestCase):
@@ -14,7 +14,17 @@ class ParserTest(unittest.TestCase):
         self.assertEqual("Altitude", cars[0]["grade"])
         self.assertEqual("Dusty Bronze", cars[0]["colour"])
 
+    def test_priority_discord_payload(self):
+        payload = discord_payload({
+            "vin": "TESTVIN123456789", "dealer": "Test Toyota",
+            "title": "2026 Toyota LandCruiser Prado GX (Dusty Bronze)",
+            "grade": "GX", "colour": "Dusty Bronze", "price": "$80,000",
+            "image_url": "https://example.com/car.png", "detail_url": "https://example.com/car",
+        })
+        self.assertIn("PRIORITY", payload["embeds"][0]["title"])
+        self.assertEqual(0xE50000, payload["embeds"][0]["color"])
+        self.assertEqual([], payload["allowed_mentions"]["parse"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

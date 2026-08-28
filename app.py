@@ -17,8 +17,9 @@ from flask import Flask, jsonify, render_template, request
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("PRADO_DB", ROOT / "prado_stock.db"))
 DEALERS_PATH = Path(os.environ.get("PRADO_DEALERS", ROOT / "dealers.json"))
-INTERVAL_SECONDS = int(os.environ.get("PRADO_INTERVAL_SECONDS", 8 * 60 * 60))
+INTERVAL_SECONDS = int(os.environ.get("PRADO_INTERVAL_SECONDS", 60 * 60))
 HTTP_TIMEOUT = int(os.environ.get("PRADO_HTTP_TIMEOUT", 30))
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 USER_AGENT = "PradoStockWatcher/1.0 (personal stock availability checker)"
 
 app = Flask(__name__)
@@ -42,6 +43,9 @@ def init_db() -> None:
           scan_id INTEGER NOT NULL, dealer TEXT NOT NULL, url TEXT NOT NULL,
           ok INTEGER NOT NULL, vehicle_count INTEGER NOT NULL DEFAULT 0, error TEXT,
           PRIMARY KEY (scan_id, dealer)
+        );
+        CREATE TABLE IF NOT EXISTS app_meta (
+          key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS vehicles (
           vin TEXT PRIMARY KEY, dealer TEXT NOT NULL, stock_id TEXT, title TEXT NOT NULL,
@@ -98,6 +102,52 @@ def parse_stock(html: str, dealer: dict) -> list[dict]:
     return found
 
 
+def discord_payload(vehicle: dict) -> dict:
+    grade = vehicle["grade"].upper()
+    wanted_colour = vehicle["colour"].lower() in {"onyx black", "onyx night", "dusty bronze"}
+    priority = grade == "GX" and wanted_colour
+    if priority:
+        heading, embed_colour = "🚨 PRIORITY PRADO FOUND 🚨", 0xE50000
+    elif grade == "GX":
+        heading, embed_colour = "⭐ New GX Prado found", 0xFFCA00
+    elif wanted_colour:
+        heading, embed_colour = "🎨 New preferred-colour Prado found", 0x8A6138
+    else:
+        heading, embed_colour = "New Prado found", 0x2774AE
+    fields = [
+        {"name": "Dealer", "value": vehicle["dealer"], "inline": True},
+        {"name": "Grade", "value": vehicle["grade"], "inline": True},
+        {"name": "Colour", "value": vehicle["colour"], "inline": True},
+        {"name": "Price", "value": vehicle.get("price") or "Ask dealer", "inline": True},
+        {"name": "VIN", "value": vehicle["vin"], "inline": False},
+    ]
+    embed = {
+        "title": heading, "description": vehicle["title"], "url": vehicle["detail_url"],
+        "color": embed_colour, "fields": fields,
+        "footer": {"text": "WA Prado Watch"},
+    }
+    if vehicle.get("image_url"):
+        embed["thumbnail"] = {"url": vehicle["image_url"]}
+    return {"username": "WA Prado Watch", "embeds": [embed], "allowed_mentions": {"parse": []}}
+
+
+def notify_discord(vehicles: list[dict]) -> tuple[int, list[str]]:
+    if not DISCORD_WEBHOOK_URL or not vehicles:
+        return 0, []
+    sent, errors = 0, []
+    for vehicle in vehicles:
+        try:
+            response = requests.post(
+                DISCORD_WEBHOOK_URL, params={"wait": "true"}, json=discord_payload(vehicle),
+                headers={"User-Agent": USER_AGENT}, timeout=HTTP_TIMEOUT,
+            )
+            response.raise_for_status()
+            sent += 1
+        except Exception as exc:
+            errors.append(f'{vehicle["vin"]}: {exc}')
+    return sent, errors
+
+
 def scan_all() -> dict:
     if not scan_lock.acquire(blocking=False):
         return {"started": False, "message": "A scan is already running"}
@@ -107,6 +157,7 @@ def scan_all() -> dict:
         with db() as conn:
             scan_id = conn.execute("INSERT INTO scans(started_at, dealer_count) VALUES (?, ?)", (now, len(dealers))).lastrowid
         seen = set()
+        newly_found = []
         total = 0
         headers = {"User-Agent": USER_AGENT, "Accept": "text/html"}
         for dealer in dealers:
@@ -125,9 +176,13 @@ def scan_all() -> dict:
                         values = (dealer["name"], vehicle["stock_id"], vehicle["title"], vehicle["grade"],
                                   vehicle["colour"], vehicle["price"], vehicle["image_url"], vehicle["detail_url"], now, scan_id, vehicle["vin"])
                         if previous:
+                            if not previous["active"]:
+                                newly_found.append({**vehicle, "dealer": dealer["name"]})
                             conn.execute("""UPDATE vehicles SET dealer=?,stock_id=?,title=?,grade=?,colour=?,price=?,image_url=?,detail_url=?,
                               last_seen=?,last_scan_id=?,active=1,newly_added=? WHERE vin=?""", values[:-1] + (0 if previous["active"] else 1, values[-1]))
                         else:
+                            # On the first run this intentionally includes every currently stocked car.
+                            newly_found.append({**vehicle, "dealer": dealer["name"]})
                             conn.execute("""INSERT INTO vehicles(dealer,stock_id,title,grade,colour,price,image_url,detail_url,
                               first_seen,last_seen,first_scan_id,last_scan_id,active,newly_added,vin) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,1,?)""",
                               values[:-2] + (now, scan_id, scan_id, vehicle["vin"]))
@@ -143,7 +198,29 @@ def scan_all() -> dict:
                 marks = ",".join("?" for _ in successful)
                 conn.execute(f"UPDATE vehicles SET active=0 WHERE dealer IN ({marks}) AND last_scan_id < ?", (*successful, scan_id))
             conn.execute("UPDATE scans SET finished_at=?, vehicle_count=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), total, scan_id))
-        return {"started": True, "scan_id": scan_id, "vehicle_count": total}
+        notification_batch = newly_found
+        discord_was_initialized = False
+        if DISCORD_WEBHOOK_URL:
+            with db() as conn:
+                discord_was_initialized = conn.execute(
+                    "SELECT value FROM app_meta WHERE key='discord_initialized'"
+                ).fetchone() is not None
+                if not discord_was_initialized:
+                    notification_batch = [dict(row) for row in conn.execute(
+                        "SELECT * FROM vehicles WHERE active=1 ORDER BY dealer, title"
+                    )]
+        notified, notification_errors = notify_discord(notification_batch)
+        if DISCORD_WEBHOOK_URL and not notification_errors and not discord_was_initialized:
+            with db() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO app_meta(key,value) VALUES('discord_initialized',?)",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+        for error in notification_errors:
+            print(f"Discord notification failed: {error}", flush=True)
+        return {"started": True, "scan_id": scan_id, "vehicle_count": total,
+                "new_vehicle_count": len(newly_found), "notified_count": notified,
+                "notification_errors": notification_errors}
     finally:
         scan_lock.release()
 
