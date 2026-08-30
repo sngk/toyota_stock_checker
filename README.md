@@ -53,4 +53,4 @@ Create a webhook in the desired Discord channel, then start the app. It will sec
 python app.py
 ```
 
-The first Discord-enabled scan posts every Prado currently in stock. Later scans post only newly appearing or returning cars. The entered URL is kept only in memory. Keep it private; do not add it to the repository.
+The first Discord-enabled scan posts every Prado currently in stock. Later scans post only newly appearing or returning cars. For posts created after this feature was installed, a vehicle that disappears from dealer stock has its original Discord post struck through and marked as no longer available. Older posts are left untouched because their Discord message IDs were not previously recorded. The entered URL is kept only in memory. Keep it private; do not add it to the repository.

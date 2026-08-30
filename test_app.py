@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app as stock_app
-from app import discord_payload, parse_stock
+from app import discord_payload, parse_stock, unavailable_discord_payload
 
 
 class ParserTest(unittest.TestCase):
@@ -29,6 +29,18 @@ class ParserTest(unittest.TestCase):
         self.assertIn("PRIORITY", payload["embeds"][0]["title"])
         self.assertEqual(0xE50000, payload["embeds"][0]["color"])
         self.assertEqual([], payload["allowed_mentions"]["parse"])
+
+    def test_unavailable_discord_payload_is_struck_through(self):
+        payload = unavailable_discord_payload({
+            "vin": "TESTVIN123456789", "dealer": "Test Toyota",
+            "title": "2026 Toyota LandCruiser Prado GX (Dusty Bronze)",
+            "grade": "GX", "colour": "Dusty Bronze", "condition": "New",
+            "price": "$80,000", "image_url": None, "detail_url": "https://example.com/car",
+        })
+        embed = payload["embeds"][0]
+        self.assertEqual("❌ NO LONGER AVAILABLE", embed["title"])
+        self.assertIn("~~2026 Toyota LandCruiser Prado", embed["description"])
+        self.assertEqual(0x6B7280, embed["color"])
 
     def test_demo_is_detected_and_labelled(self):
         html = '''<ul data-list-type="demonstrator"><li class="tb-list-item" data-id="demo1"

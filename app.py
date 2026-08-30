@@ -56,7 +56,7 @@ def init_db() -> None:
           grade TEXT NOT NULL, colour TEXT NOT NULL, condition TEXT NOT NULL DEFAULT 'New', price TEXT, image_url TEXT,
           detail_url TEXT, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
           first_scan_id INTEGER NOT NULL, last_scan_id INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
-          newly_added INTEGER NOT NULL DEFAULT 1
+          newly_added INTEGER NOT NULL DEFAULT 1, discord_message_id TEXT
         );
         """)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(vehicles)")}
@@ -79,7 +79,8 @@ def init_db() -> None:
               condition TEXT NOT NULL DEFAULT 'New', price TEXT, image_url TEXT, detail_url TEXT,
               first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, first_scan_id INTEGER NOT NULL,
               last_scan_id INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
-              newly_added INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (region, vin)
+              newly_added INTEGER NOT NULL DEFAULT 1, discord_message_id TEXT,
+              PRIMARY KEY (region, vin)
             );
             INSERT INTO vehicles(vin,region,dealer,stock_id,title,grade,colour,condition,price,image_url,
               detail_url,first_seen,last_seen,first_scan_id,last_scan_id,active,newly_added)
@@ -87,6 +88,9 @@ def init_db() -> None:
               first_seen,last_seen,first_scan_id,last_scan_id,active,newly_added FROM vehicles_wa_legacy;
             DROP TABLE vehicles_wa_legacy;
             """)
+        vehicle_columns = {row[1] for row in conn.execute("PRAGMA table_info(vehicles)")}
+        if "discord_message_id" not in vehicle_columns:
+            conn.execute("ALTER TABLE vehicles ADD COLUMN discord_message_id TEXT")
 
 
 def load_dealers(region: str = "wa") -> list[dict]:
@@ -170,6 +174,16 @@ def discord_payload(vehicle: dict) -> dict:
     return {"username": "WA Prado Watch", "embeds": [embed], "allowed_mentions": {"parse": []}}
 
 
+def unavailable_discord_payload(vehicle: dict) -> dict:
+    payload = discord_payload(vehicle)
+    embed = payload["embeds"][0]
+    embed["title"] = "❌ NO LONGER AVAILABLE"
+    embed["description"] = f'~~{vehicle["title"]}~~\n\n**This vehicle is no longer listed by the dealer.**'
+    embed["color"] = 0x6B7280
+    embed["fields"].insert(0, {"name": "Status", "value": "No longer available", "inline": False})
+    return {"embeds": payload["embeds"], "allowed_mentions": {"parse": []}}
+
+
 def notify_discord(vehicles: list[dict]) -> tuple[int, list[str]]:
     if not DISCORD_WEBHOOK_URL or not vehicles:
         return 0, []
@@ -181,10 +195,35 @@ def notify_discord(vehicles: list[dict]) -> tuple[int, list[str]]:
                 headers={"User-Agent": USER_AGENT}, timeout=HTTP_TIMEOUT,
             )
             response.raise_for_status()
+            message_id = str(response.json().get("id", "")).strip()
+            if not message_id:
+                raise ValueError("Discord did not return a message ID")
+            with db() as conn:
+                conn.execute(
+                    "UPDATE vehicles SET discord_message_id=? WHERE region='wa' AND vin=?",
+                    (message_id, vehicle["vin"]),
+                )
             sent += 1
         except Exception as exc:
             errors.append(f'{vehicle["vin"]}: {exc}')
     return sent, errors
+
+
+def mark_discord_unavailable(vehicles: list[dict]) -> list[str]:
+    if not DISCORD_WEBHOOK_URL:
+        return []
+    errors = []
+    for vehicle in vehicles:
+        try:
+            response = requests.patch(
+                f'{DISCORD_WEBHOOK_URL}/messages/{vehicle["discord_message_id"]}',
+                json=unavailable_discord_payload(vehicle),
+                headers={"User-Agent": USER_AGENT}, timeout=HTTP_TIMEOUT,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            errors.append(f'{vehicle["vin"]}: {exc}')
+    return errors
 
 
 def configure_discord() -> None:
@@ -256,12 +295,20 @@ def scan_all(region: str = "wa") -> dict:
                 with db() as conn:
                     conn.execute("INSERT INTO dealer_checks VALUES(?,?,?,?,?,?)", (scan_id, dealer.get("name", "Unknown"), dealer.get("url", ""), 0, 0, str(exc)[:500]))
         # Only deactivate cars from dealers that completed successfully.
+        disappeared = []
         with db() as conn:
             successful = [r[0] for r in conn.execute("SELECT dealer FROM dealer_checks WHERE scan_id=? AND ok=1", (scan_id,))]
             if successful:
                 marks = ",".join("?" for _ in successful)
+                if region == "wa":
+                    disappeared = [dict(row) for row in conn.execute(
+                        f"""SELECT * FROM vehicles WHERE region=? AND active=1
+                          AND discord_message_id IS NOT NULL AND dealer IN ({marks}) AND last_scan_id < ?""",
+                        (region, *successful, scan_id),
+                    )]
                 conn.execute(f"UPDATE vehicles SET active=0 WHERE region=? AND dealer IN ({marks}) AND last_scan_id < ?", (region, *successful, scan_id))
             conn.execute("UPDATE scans SET finished_at=?, vehicle_count=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), total, scan_id))
+        unavailable_errors = mark_discord_unavailable(disappeared)
         notification_batch = newly_found if region == "wa" else []
         discord_was_initialized = False
         if DISCORD_WEBHOOK_URL and region == "wa":
@@ -282,9 +329,13 @@ def scan_all(region: str = "wa") -> dict:
                 )
         for error in notification_errors:
             print(f"Discord notification failed: {error}", flush=True)
+        for error in unavailable_errors:
+            print(f"Discord unavailable update failed: {error}", flush=True)
         return {"started": True, "scan_id": scan_id, "vehicle_count": total,
                 "new_vehicle_count": len(newly_found), "notified_count": notified,
-                "notification_errors": notification_errors}
+                "notification_errors": notification_errors,
+                "unavailable_updated_count": len(disappeared) - len(unavailable_errors),
+                "unavailable_errors": unavailable_errors}
     finally:
         scan_lock.release()
 
