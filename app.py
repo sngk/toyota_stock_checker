@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin
@@ -18,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("PRADO_DB", ROOT / "prado_stock.db"))
 DEALERS_PATH = Path(os.environ.get("PRADO_DEALERS", ROOT / "dealers.json"))
 NSW_DEALERS_PATH = Path(os.environ.get("PRADO_NSW_DEALERS", ROOT / "dealers_nsw.json"))
+SA_DEALERS_PATH = Path(os.environ.get("PRADO_SA_DEALERS", ROOT / "dealers_sa.json"))
 DEFAULT_INTERVAL_SECONDS = int(os.environ.get("PRADO_INTERVAL_SECONDS", 60 * 60))
 HTTP_TIMEOUT = int(os.environ.get("PRADO_HTTP_TIMEOUT", 30))
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
@@ -26,13 +28,18 @@ USER_AGENT = "PradoStockWatcher/1.0 (personal stock availability checker)"
 app = Flask(__name__)
 scan_lock = threading.Lock()
 scheduler_wakeup = threading.Event()
-REGIONS = {"wa": DEALERS_PATH, "nsw": NSW_DEALERS_PATH}
+REGIONS = {"wa": DEALERS_PATH, "nsw": NSW_DEALERS_PATH, "sa": SA_DEALERS_PATH}
 
 
-def db() -> sqlite3.Connection:
+@contextmanager
+def db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -263,7 +270,7 @@ def scan_all(region: str = "wa") -> dict:
                 for source_url in (new_url, demo_url):
                     response = requests.get(source_url, headers=headers, timeout=HTTP_TIMEOUT)
                     response.raise_for_status()
-                    if "LandCruiser Prado" not in response.text:
+                    if not re.search(r"\b(?:LandCruiser\s+)?Prado\b", response.text, re.I):
                         raise ValueError(f"Page did not look like a Prado stock page: {source_url}")
                     source_dealer = {**dealer, "url": source_url}
                     for vehicle in parse_stock(response.text, source_dealer):
@@ -347,15 +354,15 @@ def current_interval() -> int:
 
 
 def scheduler() -> None:
-    # Check both tabs on startup, then use the saved interval (which can change live).
-    scan_all("wa")
-    scan_all("nsw")
+    # Check every state on startup, then use the saved interval (which can change live).
+    for region in REGIONS:
+        scan_all(region)
     while True:
         if scheduler_wakeup.wait(current_interval()):
             scheduler_wakeup.clear()
             continue
-        scan_all("wa")
-        scan_all("nsw")
+        for region in REGIONS:
+            scan_all(region)
 
 
 @app.get("/")

@@ -82,15 +82,17 @@ class ApiTest(unittest.TestCase):
 
     def test_region_filters_are_isolated(self):
         with stock_app.db() as conn:
-            for region in ("wa", "nsw"):
+            for region in ("wa", "nsw", "sa"):
                 conn.execute("""INSERT INTO vehicles(vin,region,dealer,title,grade,colour,condition,
                   first_seen,last_seen,first_scan_id,last_scan_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                   ("SAMEVIN123456789", region, region.upper(), "Prado GX", "GX", "Onyx Night",
                    "New", "now", "now", 1, 1))
         wa = self.client.get("/api/vehicles?region=wa").get_json()
         nsw = self.client.get("/api/vehicles?region=nsw").get_json()
+        sa = self.client.get("/api/vehicles?region=sa").get_json()
         self.assertEqual("WA", wa[0]["dealer"])
         self.assertEqual("NSW", nsw[0]["dealer"])
+        self.assertEqual("SA", sa[0]["dealer"])
 
     def test_interval_setting_is_persisted_and_validated(self):
         response = self.client.post("/api/settings", json={"interval_seconds": 1800})
@@ -107,6 +109,17 @@ class ApiTest(unittest.TestCase):
              patch.object(stock_app, "parse_stock", return_value=[]), \
              patch.object(stock_app, "notify_discord", return_value=(0, [])) as notify:
             stock_app.scan_all("nsw")
+        notify.assert_called_once_with([])
+
+    def test_sa_scan_does_not_notify_discord(self):
+        dealer_file = Path(self.temp_dir.name) / "sa.json"
+        dealer_file.write_text(json.dumps([{"name": "SA Toyota", "url": "https://example.com/prado"}]))
+        response = type("Response", (), {"text": "LandCruiser Prado", "raise_for_status": lambda self: None})()
+        with patch.dict(stock_app.REGIONS, {"sa": dealer_file}), \
+             patch.object(stock_app.requests, "get", return_value=response), \
+             patch.object(stock_app, "parse_stock", return_value=[]), \
+             patch.object(stock_app, "notify_discord", return_value=(0, [])) as notify:
+            stock_app.scan_all("sa")
         notify.assert_called_once_with([])
 
 
