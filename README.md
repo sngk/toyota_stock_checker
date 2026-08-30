@@ -13,6 +13,12 @@ Open `http://127.0.0.1:8080` on the same computer. Raspberry Pi installation bel
 
 WA dealer pages are in `dealers.json`, and NSW dealer pages are in `dealers_nsw.json`. Each dealer's `/demonstrators/prado` page is checked automatically; `demo_url` can override it when necessary. Discord alerts remain WA-only; NSW results are dashboard-only.
 
+## Windows
+
+Double-click `start_windows.bat`. It creates a Python environment if needed, checks dependencies, starts the existing app, and opens `http://127.0.0.1:8080`.
+
+The Windows launcher deliberately disables Discord and uses `prado_stock_windows.db`. This prevents a Windows copy from duplicating the Raspberry Pi's Discord notifications or sharing its scan history. The Raspberry Pi installation and configuration are not changed.
+
 ## Raspberry Pi
 
 Install Raspberry Pi OS, connect the Pi to your home network, clone this repository, and run:
