@@ -5,10 +5,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app as stock_app
-from app import discord_payload, parse_stock, unavailable_discord_payload
+from app import discord_payload, parse_stock, should_notify, unavailable_discord_payload
 
 
 class ParserTest(unittest.TestCase):
+    def test_notification_filter_keeps_all_wa_and_only_priority_matches_elsewhere(self):
+        ordinary = {"grade": "Kakadu", "colour": "Glacier White"}
+        self.assertTrue(should_notify("wa", ordinary))
+        self.assertFalse(should_notify("vic", ordinary))
+        self.assertTrue(should_notify("vic", {"grade": "GX", "colour": "Onyx Night"}))
+        self.assertTrue(should_notify("qld", {"grade": "gx", "colour": "Dusty Bronze"}))
+        self.assertFalse(should_notify("nsw", {"grade": "GXL", "colour": "Onyx Night"}))
+        self.assertFalse(should_notify("sa", {"grade": "GX", "colour": "Glacier White"}))
+
     def test_bunbury_fixture_when_present(self):
         fixture = Path("bunbury.tmp.html")
         if not fixture.exists():

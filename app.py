@@ -179,11 +179,20 @@ def discord_payload(vehicle: dict) -> dict:
     embed = {
         "title": heading, "description": vehicle["title"], "url": vehicle["detail_url"],
         "color": embed_colour, "fields": fields,
-        "footer": {"text": "WA Prado Watch"},
+        "footer": {"text": f'{vehicle.get("region", "wa").upper()} Prado Watch'},
     }
     if vehicle.get("image_url"):
         embed["thumbnail"] = {"url": vehicle["image_url"]}
-    return {"username": "WA Prado Watch", "embeds": [embed], "allowed_mentions": {"parse": []}}
+    return {"username": "Prado Watch", "embeds": [embed], "allowed_mentions": {"parse": []}}
+
+
+def should_notify(region: str, vehicle: dict) -> bool:
+    if region == "wa":
+        return True
+    return (
+        vehicle.get("grade", "").strip().upper() == "GX"
+        and vehicle.get("colour", "").strip().lower() in {"onyx night", "dusty bronze"}
+    )
 
 
 def unavailable_discord_payload(vehicle: dict) -> dict:
@@ -212,8 +221,8 @@ def notify_discord(vehicles: list[dict]) -> tuple[int, list[str]]:
                 raise ValueError("Discord did not return a message ID")
             with db() as conn:
                 conn.execute(
-                    "UPDATE vehicles SET discord_message_id=? WHERE region='wa' AND vin=?",
-                    (message_id, vehicle["vin"]),
+                    "UPDATE vehicles SET discord_message_id=? WHERE region=? AND vin=?",
+                    (message_id, vehicle.get("region", "wa"), vehicle["vin"]),
                 )
             sent += 1
         except Exception as exc:
@@ -291,12 +300,12 @@ def scan_all(region: str = "wa") -> dict:
                                   vehicle["detail_url"], now, scan_id, vehicle["vin"])
                         if previous:
                             if not previous["active"]:
-                                newly_found.append({**vehicle, "dealer": dealer["name"]})
+                                newly_found.append({**vehicle, "dealer": dealer["name"], "region": region})
                             conn.execute("""UPDATE vehicles SET dealer=?,stock_id=?,title=?,grade=?,colour=?,condition=?,price=?,image_url=?,detail_url=?,
                               last_seen=?,last_scan_id=?,active=1,newly_added=? WHERE region=? AND vin=?""", values[:-1] + (0 if previous["active"] else 1, region, values[-1]))
                         else:
                             # On the first run this intentionally includes every currently stocked car.
-                            newly_found.append({**vehicle, "dealer": dealer["name"]})
+                            newly_found.append({**vehicle, "dealer": dealer["name"], "region": region})
                             conn.execute("""INSERT INTO vehicles(dealer,stock_id,title,grade,colour,condition,price,image_url,detail_url,
                               first_seen,last_seen,first_scan_id,last_scan_id,active,newly_added,region,vin) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?)""",
                               values[:-2] + (now, scan_id, scan_id, region, vehicle["vin"]))
@@ -312,16 +321,15 @@ def scan_all(region: str = "wa") -> dict:
             successful = [r[0] for r in conn.execute("SELECT dealer FROM dealer_checks WHERE scan_id=? AND ok=1", (scan_id,))]
             if successful:
                 marks = ",".join("?" for _ in successful)
-                if region == "wa":
-                    disappeared = [dict(row) for row in conn.execute(
-                        f"""SELECT * FROM vehicles WHERE region=? AND active=1
-                          AND discord_message_id IS NOT NULL AND dealer IN ({marks}) AND last_scan_id < ?""",
-                        (region, *successful, scan_id),
-                    )]
+                disappeared = [dict(row) for row in conn.execute(
+                    f"""SELECT * FROM vehicles WHERE region=? AND active=1
+                      AND discord_message_id IS NOT NULL AND dealer IN ({marks}) AND last_scan_id < ?""",
+                    (region, *successful, scan_id),
+                )]
                 conn.execute(f"UPDATE vehicles SET active=0 WHERE region=? AND dealer IN ({marks}) AND last_scan_id < ?", (region, *successful, scan_id))
             conn.execute("UPDATE scans SET finished_at=?, vehicle_count=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), total, scan_id))
         unavailable_errors = mark_discord_unavailable(disappeared)
-        notification_batch = newly_found if region == "wa" else []
+        notification_batch = [vehicle for vehicle in newly_found if should_notify(region, vehicle)]
         discord_was_initialized = False
         if DISCORD_WEBHOOK_URL and region == "wa":
             with db() as conn:

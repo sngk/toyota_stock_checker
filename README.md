@@ -11,7 +11,7 @@ python app.py
 
 Open `http://127.0.0.1:8080` on the same computer. Raspberry Pi installation below enables access from other devices on your home network.
 
-WA dealer pages are in `dealers.json`; the other state lists are in `dealers_nsw.json`, `dealers_sa.json`, `dealers_vic.json`, and `dealers_qld.json`. Each dealer's `/demonstrators/prado` page is checked automatically; `demo_url` can override it when necessary. Discord alerts remain WA-only; all other state results are dashboard-only.
+WA dealer pages are in `dealers.json`; the other state lists are in `dealers_nsw.json`, `dealers_sa.json`, `dealers_vic.json`, and `dealers_qld.json`. Each dealer's `/demonstrators/prado` page is checked automatically; `demo_url` can override it when necessary. Discord alerts include every WA Prado; other states alert only for GX vehicles in Onyx Night or Dusty Bronze.
 
 ## Windows
 
