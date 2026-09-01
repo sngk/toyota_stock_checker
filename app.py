@@ -20,6 +20,8 @@ DB_PATH = Path(os.environ.get("PRADO_DB", ROOT / "prado_stock.db"))
 DEALERS_PATH = Path(os.environ.get("PRADO_DEALERS", ROOT / "dealers.json"))
 NSW_DEALERS_PATH = Path(os.environ.get("PRADO_NSW_DEALERS", ROOT / "dealers_nsw.json"))
 SA_DEALERS_PATH = Path(os.environ.get("PRADO_SA_DEALERS", ROOT / "dealers_sa.json"))
+VIC_DEALERS_PATH = Path(os.environ.get("PRADO_VIC_DEALERS", ROOT / "dealers_vic.json"))
+QLD_DEALERS_PATH = Path(os.environ.get("PRADO_QLD_DEALERS", ROOT / "dealers_qld.json"))
 DEFAULT_INTERVAL_SECONDS = int(os.environ.get("PRADO_INTERVAL_SECONDS", 60 * 60))
 HTTP_TIMEOUT = int(os.environ.get("PRADO_HTTP_TIMEOUT", 30))
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
@@ -28,7 +30,10 @@ USER_AGENT = "PradoStockWatcher/1.0 (personal stock availability checker)"
 app = Flask(__name__)
 scan_lock = threading.Lock()
 scheduler_wakeup = threading.Event()
-REGIONS = {"wa": DEALERS_PATH, "nsw": NSW_DEALERS_PATH, "sa": SA_DEALERS_PATH}
+REGIONS = {
+    "wa": DEALERS_PATH, "nsw": NSW_DEALERS_PATH, "sa": SA_DEALERS_PATH,
+    "vic": VIC_DEALERS_PATH, "qld": QLD_DEALERS_PATH,
+}
 
 
 @contextmanager

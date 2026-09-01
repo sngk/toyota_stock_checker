@@ -1,6 +1,6 @@
 # Prado Watch
 
-Checks WA, NSW and SA Toyota dealer pages for new and demonstrator LandCruiser Prado stock. Separate tabs use the same highlighting for new listings, demos, GX models, and preferred colours. The dashboard is dark by default and its automatic check interval can be changed and saved from the page (one hour by default).
+Checks WA, NSW, SA, VIC and QLD Toyota dealer pages for new and demonstrator LandCruiser Prado stock. Separate tabs use the same highlighting for new listings, demos, GX models, and preferred colours. The dashboard is dark by default and its automatic check interval can be changed and saved from the page (one hour by default).
 
 ## Run
 
@@ -11,7 +11,7 @@ python app.py
 
 Open `http://127.0.0.1:8080` on the same computer. Raspberry Pi installation below enables access from other devices on your home network.
 
-WA dealer pages are in `dealers.json`, NSW dealer pages are in `dealers_nsw.json`, and SA dealer pages are in `dealers_sa.json`. Each dealer's `/demonstrators/prado` page is checked automatically; `demo_url` can override it when necessary. Discord alerts remain WA-only; NSW and SA results are dashboard-only.
+WA dealer pages are in `dealers.json`; the other state lists are in `dealers_nsw.json`, `dealers_sa.json`, `dealers_vic.json`, and `dealers_qld.json`. Each dealer's `/demonstrators/prado` page is checked automatically; `demo_url` can override it when necessary. Discord alerts remain WA-only; all other state results are dashboard-only.
 
 ## Windows
 

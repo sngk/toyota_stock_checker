@@ -82,7 +82,7 @@ class ApiTest(unittest.TestCase):
 
     def test_region_filters_are_isolated(self):
         with stock_app.db() as conn:
-            for region in ("wa", "nsw", "sa"):
+            for region in ("wa", "nsw", "sa", "vic", "qld"):
                 conn.execute("""INSERT INTO vehicles(vin,region,dealer,title,grade,colour,condition,
                   first_seen,last_seen,first_scan_id,last_scan_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                   ("SAMEVIN123456789", region, region.upper(), "Prado GX", "GX", "Onyx Night",
@@ -90,9 +90,13 @@ class ApiTest(unittest.TestCase):
         wa = self.client.get("/api/vehicles?region=wa").get_json()
         nsw = self.client.get("/api/vehicles?region=nsw").get_json()
         sa = self.client.get("/api/vehicles?region=sa").get_json()
+        vic = self.client.get("/api/vehicles?region=vic").get_json()
+        qld = self.client.get("/api/vehicles?region=qld").get_json()
         self.assertEqual("WA", wa[0]["dealer"])
         self.assertEqual("NSW", nsw[0]["dealer"])
         self.assertEqual("SA", sa[0]["dealer"])
+        self.assertEqual("VIC", vic[0]["dealer"])
+        self.assertEqual("QLD", qld[0]["dealer"])
 
     def test_interval_setting_is_persisted_and_validated(self):
         response = self.client.post("/api/settings", json={"interval_seconds": 1800})
@@ -121,6 +125,18 @@ class ApiTest(unittest.TestCase):
              patch.object(stock_app, "notify_discord", return_value=(0, [])) as notify:
             stock_app.scan_all("sa")
         notify.assert_called_once_with([])
+
+    def test_vic_and_qld_scans_do_not_notify_discord(self):
+        for region in ("vic", "qld"):
+            dealer_file = Path(self.temp_dir.name) / f"{region}.json"
+            dealer_file.write_text(json.dumps([{"name": f"{region.upper()} Toyota", "url": "https://example.com/prado"}]))
+            response = type("Response", (), {"text": "LandCruiser Prado", "raise_for_status": lambda self: None})()
+            with patch.dict(stock_app.REGIONS, {region: dealer_file}), \
+                 patch.object(stock_app.requests, "get", return_value=response), \
+                 patch.object(stock_app, "parse_stock", return_value=[]), \
+                 patch.object(stock_app, "notify_discord", return_value=(0, [])) as notify:
+                stock_app.scan_all(region)
+            notify.assert_called_once_with([])
 
 
 if __name__ == "__main__":
